@@ -73,7 +73,7 @@ client.once('ready', async () => {
         ];
 
         for (const command of commands) {
-            await client.application.commands.create(command);
+            await client.application.commands.create(command.toJSON());
             console.log(`Registered command: ${command.name}`);
         }
         
@@ -87,7 +87,7 @@ client.once('ready', async () => {
 async function checkInstanceStatus(instanceId, expectedState, maxAttempts = 20) {
     for (let i = 0; i < maxAttempts; i++) {
         try {
-            const instance = await vultr.instances.getInstance({ instance_id: instanceId });
+            const instance = await vultr.instances.getInstance({ "instance-id": instanceId });
             if (instance.instance.status === expectedState) {
                 return true;
             }
@@ -113,9 +113,9 @@ client.on('interactionCreate', async interaction => {
         // Handle different commands
         switch (interaction.commandName) {
             case 'restore-snapshot':
-                await vultr.instances.restore({
-                    instance_id: process.env.VULTR_INSTANCE_ID,
-                    snapshot_id: process.env.VULTR_SNAPSHOT_ID
+                await vultr.instances.restoreInstance({
+                    "instance-id": process.env.VULTR_INSTANCE_ID,
+                    "snapshot-id": process.env.VULTR_SNAPSHOT_ID
                 });
                 await interaction.editReply('⏳ Restoring from snapshot... This may take several minutes.');
                 
@@ -129,21 +129,32 @@ client.on('interactionCreate', async interaction => {
                 break;
 
             case 'create-snapshot':
-                const description = interaction.options.getString('description') || 'Snapshot created via Discord bot';
-                const snapshot = await vultr.snapshots.create({
-                    instance_id: process.env.VULTR_INSTANCE_ID,
-                    description: description
-                });
-                
-                await interaction.editReply(`⏳ Creating snapshot with ID: ${snapshot.snapshot.id}... This may take several minutes.`);
-                // Note: Snapshot status checking would require different API calls and logic
-                await interaction.editReply('✅ Snapshot creation process has started. Check Vultr dashboard for completion.');
+                try {
+                    const description = interaction.options.getString('description') || 'Snapshot created via Discord bot';
+                    console.log('Creating snapshot with parameters:', {
+                        instanceId: process.env.VULTR_INSTANCE_ID,
+                        description: description
+                    });
+                    
+                    // Use the same kebab-case format that works for other API methods
+                    const snapshot = await vultr.snapshots.create({
+                        "instance-id": process.env.VULTR_INSTANCE_ID,
+                        "description": description
+                    });
+                    
+                    console.log('Snapshot creation response:', snapshot);
+                    await interaction.editReply(`⏳ Creating snapshot with ID: ${snapshot.snapshot.id}... This may take several minutes.`);
+                    await interaction.editReply('✅ Snapshot creation process has started. Check Vultr dashboard for completion.');
+                } catch (error) {
+                    console.error('Snapshot creation error details:', error);
+                    await interaction.editReply(`❌ Failed to create snapshot: ${error.message}`);
+                }
                 break;
 
             case 'start':
                 // Start the instance
-                await vultr.instances.start({
-                    instance_id: process.env.VULTR_INSTANCE_ID
+                await vultr.instances.startInstance({
+                    "instance-id": process.env.VULTR_INSTANCE_ID
                 });
                 await interaction.editReply('⏳ Starting the server... Please wait.');
                 
@@ -158,8 +169,8 @@ client.on('interactionCreate', async interaction => {
 
             case 'stop':
                 // Stop the instance
-                await vultr.instances.halt({
-                    instance_id: process.env.VULTR_INSTANCE_ID
+                await vultr.instances.haltInstance({
+                    "instance-id": process.env.VULTR_INSTANCE_ID
                 });
                 await interaction.editReply('⏳ Stopping the server... Please wait.');
                 
@@ -175,8 +186,8 @@ client.on('interactionCreate', async interaction => {
             case 'status':
                 try {
                     // Get instance information from Vultr API
-                    const response = await vultr.instance.get({
-                        instance_id: process.env.VULTR_INSTANCE_ID
+                    const response = await vultr.instances.getInstance({
+                        "instance-id": process.env.VULTR_INSTANCE_ID
                     });
 
                     // Extract useful information from the response
@@ -220,4 +231,4 @@ client.on('interactionCreate', async interaction => {
 // Log in to Discord with token from .env file
 client.login(process.env.DISCORD_TOKEN)
     .then(() => console.log('Bot is connecting to Discord...'))
-    .catch(error => console.error('Failed to login:', error)); 
+    .catch(error => console.error('Failed to login:', error));
