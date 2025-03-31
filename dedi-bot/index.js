@@ -193,11 +193,11 @@ client.on('interactionCreate', async interaction => {
                     // Extract useful information from the response
                     const instance = response.instance;
                     
-                    // Create a formatted status message
+                    // Create a formatted status message with proper date handling
                     const statusMessage = [
                         `📊 **Server Status Report**`,
                         `\`\`\``,
-                        `Status: ${instance.status}`,
+                        `Status: ${instance.status} ${instance.power_status === 'running' ? '🟢' : '🔴'}`,
                         `Power Status: ${instance.power_status}`,
                         `Server State: ${instance.server_status}`,
                         `RAM: ${instance.ram} MB`,
@@ -205,7 +205,14 @@ client.on('interactionCreate', async interaction => {
                         `Region: ${instance.region}`,
                         `IP Address: ${instance.main_ip}`,
                         `\`\`\``,
-                        `Last Update: ${new Date(instance.date_updated).toLocaleString()}`
+                        // Use date_created instead of non-existent date_updated
+                        `Server Created: ${(() => {
+                            try {
+                                return instance.date_created ? new Date(instance.date_created).toLocaleString() : 'Not available';
+                            } catch (error) {
+                                return 'Not available';
+                            }
+                        })()}`
                     ].join('\n');
 
                     // Send the formatted message
