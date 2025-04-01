@@ -88,15 +88,29 @@ async function checkInstanceStatus(instanceId, expectedState, maxAttempts = 20) 
     for (let i = 0; i < maxAttempts; i++) {
         try {
             const instance = await vultr.instances.getInstance({ "instance-id": instanceId });
-            if (instance.instance.status === expectedState) {
-                return true;
+            
+            // Improved status checking - we need to check different fields based on the expected state
+            if (expectedState === 'stopped') {
+                // For 'stopped' state, check power_status rather than status
+                console.log(`Attempt ${i+1}/${maxAttempts}: power_status=${instance.instance.power_status}, status=${instance.instance.status}`);
+                if (instance.instance.power_status === 'stopped') {
+                    return true;
+                }
+            } else {
+                // For other states like 'active', check the status field
+                console.log(`Attempt ${i+1}/${maxAttempts}: status=${instance.instance.status}, power_status=${instance.instance.power_status}`);
+                if (instance.instance.status === expectedState) {
+                    return true;
+                }
             }
+            
             // Wait 3 seconds before checking again
             await new Promise(resolve => setTimeout(resolve, 3000));
         } catch (error) {
-            console.error('Error checking instance status:', error);
+            console.error(`Error checking instance status (attempt ${i+1}/${maxAttempts}):`, error);
         }
     }
+    console.log(`Failed to reach ${expectedState} state after ${maxAttempts} attempts`);
     return false;
 }
 
@@ -113,23 +127,69 @@ client.on('interactionCreate', async interaction => {
         // Handle different commands
         switch (interaction.commandName) {
             case 'restore-snapshot':
-                await vultr.instances.restoreInstance({
-                    "instance-id": process.env.VULTR_INSTANCE_ID,
-                    "snapshot-id": process.env.VULTR_SNAPSHOT_ID
-                });
-                await interaction.editReply('⏳ Restoring from snapshot... This may take several minutes.');
-                
-                // For restore, we'll wait longer and check for active status
-                const restoreSuccess = await checkInstanceStatus(process.env.VULTR_INSTANCE_ID, 'active', 40);
-                if (restoreSuccess) {
-                    await interaction.editReply('✅ Server has been successfully restored from snapshot and is running!');
-                } else {
-                    await interaction.editReply('⚠️ Restore process is in progress but taking longer than expected. Please check Vultr dashboard.');
+                try {
+                    console.log('Restoring server from snapshot:', {
+                        instanceId: process.env.VULTR_INSTANCE_ID,
+                        snapshotId: process.env.VULTR_SNAPSHOT_ID
+                    });
+                    
+                    await vultr.instances.restoreInstance({
+                        "instance-id": process.env.VULTR_INSTANCE_ID,
+                        "snapshot-id": process.env.VULTR_SNAPSHOT_ID
+                    });
+                    
+                    await interaction.editReply('⏳ Restoring from snapshot... This may take several minutes.');
+                    
+                    // Define a custom check for restored state - similar to start but with longer timeout
+                    // A fully restored server should have both status=active and power_status=running
+                    const checkRestored = async (instanceId, maxAttempts = 40) => {
+                        for (let i = 0; i < maxAttempts; i++) {
+                            try {
+                                const instance = await vultr.instances.getInstance({ "instance-id": instanceId });
+                                console.log(`Restore: Attempt ${i+1}/${maxAttempts}: status=${instance.instance.status}, power_status=${instance.instance.power_status}`);
+                                
+                                // Server is fully restored when both conditions are met
+                                if (instance.instance.status === 'active' && instance.instance.power_status === 'running') {
+                                    return true;
+                                }
+                                
+                                // Wait 5 seconds before checking again (longer wait for restore)
+                                await new Promise(resolve => setTimeout(resolve, 5000));
+                            } catch (error) {
+                                console.error(`Error checking restore status (attempt ${i+1}/${maxAttempts}):`, error);
+                            }
+                        }
+                        console.log(`Failed to fully restore server after ${maxAttempts} attempts`);
+                        return false;
+                    };
+                    
+                    // For restore, we'll wait longer and check for both active and running status
+                    const restoreSuccess = await checkRestored(process.env.VULTR_INSTANCE_ID);
+                    if (restoreSuccess) {
+                        await interaction.editReply('✅ Server has been successfully restored from snapshot and is running!');
+                    } else {
+                        await interaction.editReply('⚠️ Restore process is in progress but taking longer than expected. Please check Vultr dashboard.');
+                    }
+                } catch (error) {
+                    console.error('Restore snapshot error details:', error);
+                    await interaction.editReply(`❌ Failed to restore snapshot: ${error.message}`);
                 }
                 break;
 
             case 'create-snapshot':
                 try {
+                    // First check if server is running, as snapshots generally work better on running servers
+                    const preCheck = await vultr.instances.getInstance({
+                        "instance-id": process.env.VULTR_INSTANCE_ID
+                    });
+                    
+                    // If server is stopped, warn the user but proceed
+                    if (preCheck.instance.power_status !== 'running') {
+                        await interaction.editReply('⚠️ Warning: Creating a snapshot of a stopped server. For best results, consider starting the server first.');
+                        // Wait 3 seconds so user sees the warning
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                    }
+                    
                     const description = interaction.options.getString('description') || 'Snapshot created via Discord bot';
                     console.log('Creating snapshot with parameters:', {
                         instanceId: process.env.VULTR_INSTANCE_ID,
@@ -137,14 +197,25 @@ client.on('interactionCreate', async interaction => {
                     });
                     
                     // Use the same kebab-case format that works for other API methods
-                    const snapshot = await vultr.snapshots.create({
+                    const snapshot = await vultr.snapshots.createSnapshot({
                         "instance-id": process.env.VULTR_INSTANCE_ID,
                         "description": description
                     });
                     
-                    console.log('Snapshot creation response:', snapshot);
-                    await interaction.editReply(`⏳ Creating snapshot with ID: ${snapshot.snapshot.id}... This may take several minutes.`);
-                    await interaction.editReply('✅ Snapshot creation process has started. Check Vultr dashboard for completion.');
+                    console.log('Snapshot creation response:', JSON.stringify(snapshot, null, 2));
+                    
+                    if (snapshot && snapshot.snapshot && snapshot.snapshot.id) {
+                        await interaction.editReply(`⏳ Creating snapshot with ID: \`${snapshot.snapshot.id}\`...\n\nThis may take several minutes to complete. The snapshot ID has been captured and can be used for future restore operations.`);
+                        
+                        // Provide the ID as a clear suggestion for updating their .env file
+                        setTimeout(async () => {
+                            await interaction.editReply(`✅ Snapshot creation process has started!\n\nID: \`${snapshot.snapshot.id}\`\nDescription: "${description}"\n\nTo use this snapshot for future restores, update your \`.env\` file with:\n\`\`\`\nVULTR_SNAPSHOT_ID=${snapshot.snapshot.id}\n\`\`\``);
+                        }, 5000);
+                    } else {
+                        // Something went wrong with the API response
+                        console.error('Unexpected snapshot API response format:', snapshot);
+                        await interaction.editReply('⚠️ Snapshot creation request was sent, but received an unexpected response format. Please check the Vultr dashboard to confirm.');
+                    }
                 } catch (error) {
                     console.error('Snapshot creation error details:', error);
                     await interaction.editReply(`❌ Failed to create snapshot: ${error.message}`);
@@ -158,8 +229,31 @@ client.on('interactionCreate', async interaction => {
                 });
                 await interaction.editReply('⏳ Starting the server... Please wait.');
                 
+                // Define a custom check for started state
+                // A fully started server should have both status=active and power_status=running
+                const checkStarted = async (instanceId, maxAttempts = 20) => {
+                    for (let i = 0; i < maxAttempts; i++) {
+                        try {
+                            const instance = await vultr.instances.getInstance({ "instance-id": instanceId });
+                            console.log(`Start: Attempt ${i+1}/${maxAttempts}: status=${instance.instance.status}, power_status=${instance.instance.power_status}`);
+                            
+                            // Server is fully started when both conditions are met
+                            if (instance.instance.status === 'active' && instance.instance.power_status === 'running') {
+                                return true;
+                            }
+                            
+                            // Wait 3 seconds before checking again
+                            await new Promise(resolve => setTimeout(resolve, 3000));
+                        } catch (error) {
+                            console.error(`Error checking start status (attempt ${i+1}/${maxAttempts}):`, error);
+                        }
+                    }
+                    console.log(`Failed to fully start server after ${maxAttempts} attempts`);
+                    return false;
+                };
+                
                 // Check if instance started successfully
-                const startSuccess = await checkInstanceStatus(process.env.VULTR_INSTANCE_ID, 'active');
+                const startSuccess = await checkStarted(process.env.VULTR_INSTANCE_ID);
                 if (startSuccess) {
                     await interaction.editReply('✅ Server has successfully started and is now running!');
                 } else {
@@ -168,18 +262,55 @@ client.on('interactionCreate', async interaction => {
                 break;
 
             case 'stop':
-                // Stop the instance
-                await vultr.instances.haltInstance({
-                    "instance-id": process.env.VULTR_INSTANCE_ID
-                });
-                await interaction.editReply('⏳ Stopping the server... Please wait.');
-                
-                // Check if instance stopped successfully
-                const stopSuccess = await checkInstanceStatus(process.env.VULTR_INSTANCE_ID, 'stopped');
-                if (stopSuccess) {
-                    await interaction.editReply('✅ Server has successfully stopped!');
-                } else {
-                    await interaction.editReply('⚠️ Stop command was sent, but server may still be shutting down. Please check Vultr dashboard.');
+                try {
+                    console.log('Stopping server instance:', process.env.VULTR_INSTANCE_ID);
+                    
+                    // Stop the instance
+                    await vultr.instances.haltInstance({
+                        "instance-id": process.env.VULTR_INSTANCE_ID
+                    });
+                    await interaction.editReply('⏳ Stopping the server... Please wait.');
+                    
+                    // Define dedicated check for stopped state with longer timeout
+                    const checkStopped = async (instanceId, maxAttempts = 30) => {
+                        for (let i = 0; i < maxAttempts; i++) {
+                            try {
+                                const response = await vultr.instances.getInstance({ "instance-id": instanceId });
+                                const instance = response.instance;
+                                const isPoweredOff = instance.power_status === 'stopped';
+                                
+                                console.log(`Stop: Attempt ${i+1}/${maxAttempts}: power_status=${instance.power_status}, status=${instance.status}`);
+                                
+                                if (isPoweredOff) {
+                                    console.log('Server successfully stopped!');
+                                    return true;
+                                }
+                                
+                                // Update the message every 5 attempts to show progress
+                                if (i % 5 === 0 && i > 0) {
+                                    await interaction.editReply(`⏳ Stopping the server... Please wait. (Check ${i}/${maxAttempts})`);
+                                }
+                                
+                                // Wait 4 seconds before checking again
+                                await new Promise(resolve => setTimeout(resolve, 4000));
+                            } catch (error) {
+                                console.error(`Error checking stop status (attempt ${i+1}/${maxAttempts}):`, error);
+                            }
+                        }
+                        console.log(`Failed to confirm server stop after ${maxAttempts} attempts`);
+                        return false;
+                    };
+                    
+                    // Check if instance stopped successfully with the dedicated function
+                    const stopSuccess = await checkStopped(process.env.VULTR_INSTANCE_ID);
+                    if (stopSuccess) {
+                        await interaction.editReply('✅ Server has successfully stopped! The instance is now powered off.');
+                    } else {
+                        await interaction.editReply('⚠️ Stop command was sent, but could not confirm the server has fully shut down after multiple checks. Please verify in the Vultr dashboard.');
+                    }
+                } catch (error) {
+                    console.error('Error stopping server:', error);
+                    await interaction.editReply(`❌ Failed to stop server: ${error.message}`);
                 }
                 break;
 
