@@ -1,0 +1,16 @@
+{
+  "instances": [
+    {
+      "id": "e82d5e87-50a2-4fb4-85ea-a4f6091b0049",
+      "creator": {
+        "id": "unknown",
+        "username": "Unknown"
+      },
+      "createdAt": "2025-03-29T20:30:30.000Z",
+      "status": "terminated",
+      "ip": "144.202.66.11",
+      "name": "insignia-dedi-prod",
+      "lastUpdated": "2025-04-01T06:11:47.343Z"
+    }
+  ]
+}
