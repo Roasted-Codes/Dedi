@@ -128,48 +128,89 @@ client.on('interactionCreate', async interaction => {
         switch (interaction.commandName) {
             case 'restore-snapshot':
                 try {
-                    console.log('Restoring server from snapshot:', {
-                        instanceId: process.env.VULTR_INSTANCE_ID,
-                        snapshotId: process.env.VULTR_SNAPSHOT_ID
-                    });
+                    // Get list of all available snapshots
+                    const snapshotsResponse = await vultr.snapshots.listSnapshots();
+                    const snapshots = snapshotsResponse.snapshots;
                     
-                    await vultr.instances.restoreInstance({
-                        "instance-id": process.env.VULTR_INSTANCE_ID,
-                        "snapshot-id": process.env.VULTR_SNAPSHOT_ID
-                    });
-                    
-                    await interaction.editReply('⏳ Restoring from snapshot... This may take several minutes.');
-                    
-                    // Define a custom check for restored state - similar to start but with longer timeout
-                    // A fully restored server should have both status=active and power_status=running
-                    const checkRestored = async (instanceId, maxAttempts = 40) => {
-                        for (let i = 0; i < maxAttempts; i++) {
-                            try {
-                                const instance = await vultr.instances.getInstance({ "instance-id": instanceId });
-                                console.log(`Restore: Attempt ${i+1}/${maxAttempts}: status=${instance.instance.status}, power_status=${instance.instance.power_status}`);
-                                
-                                // Server is fully restored when both conditions are met
-                                if (instance.instance.status === 'active' && instance.instance.power_status === 'running') {
-                                    return true;
-                                }
-                                
-                                // Wait 5 seconds before checking again (longer wait for restore)
-                                await new Promise(resolve => setTimeout(resolve, 5000));
-                            } catch (error) {
-                                console.error(`Error checking restore status (attempt ${i+1}/${maxAttempts}):`, error);
-                            }
-                        }
-                        console.log(`Failed to fully restore server after ${maxAttempts} attempts`);
-                        return false;
-                    };
-                    
-                    // For restore, we'll wait longer and check for both active and running status
-                    const restoreSuccess = await checkRestored(process.env.VULTR_INSTANCE_ID);
-                    if (restoreSuccess) {
-                        await interaction.editReply('✅ Server has been successfully restored from snapshot and is running!');
-                    } else {
-                        await interaction.editReply('⚠️ Restore process is in progress but taking longer than expected. Please check Vultr dashboard.');
+                    // If no snapshots available, inform the user
+                    if (!snapshots || snapshots.length === 0) {
+                        await interaction.editReply('❌ No snapshots are available for restoration. Please create a snapshot first.');
+                        return;
                     }
+                    
+                    // Sort snapshots by date (newest first)
+                    snapshots.sort((a, b) => new Date(b.date_created) - new Date(a.date_created));
+                    
+                    // Create a formatted message with snapshot options
+                    const options = snapshots.map((snapshot, index) => {
+                        const date = new Date(snapshot.date_created).toLocaleString();
+                        return `**${index + 1}.** ${snapshot.description} (Created: ${date})\nID: \`${snapshot.id}\``;
+                    }).join('\n\n');
+                    
+                    await interaction.editReply(`**Available Snapshots:**\n\n${options}\n\nPlease reply with the number of the snapshot you want to restore.`);
+                    
+                    // Create a message collector to wait for user's response
+                    const filter = m => m.author.id === interaction.user.id && /^\d+$/.test(m.content.trim());
+                    const collector = interaction.channel.createMessageCollector({ filter, time: 60000, max: 1 });
+                    
+                    collector.on('collect', async message => {
+                        const choice = parseInt(message.content.trim());
+                        
+                        // Validate choice
+                        if (isNaN(choice) || choice < 1 || choice > snapshots.length) {
+                            await interaction.followUp('❌ Invalid selection. Please use the `/restore-snapshot` command again and select a valid number.');
+                            return;
+                        }
+                        
+                        const selectedSnapshot = snapshots[choice - 1];
+                        console.log('Restoring server from snapshot:', {
+                            instanceId: process.env.VULTR_INSTANCE_ID,
+                            snapshotId: selectedSnapshot.id,
+                            description: selectedSnapshot.description
+                        });
+                        
+                        // Delete the user's message to keep the channel clean
+                        try { await message.delete(); } catch (e) { /* Ignore errors if bot lacks permission */ }
+                        
+                        await interaction.followUp(`⏳ Restoring from snapshot: **${selectedSnapshot.description}**... This may take several minutes.`);
+                        
+                        // Restore the instance using the selected snapshot
+                        await vultr.instances.restoreInstance({
+                            "instance-id": process.env.VULTR_INSTANCE_ID,
+                            "snapshot-id": selectedSnapshot.id
+                        });
+                        
+                        // Define a custom check for restored state - similar to start but with longer timeout
+                        // A fully restored server should have both status=active and power_status=running
+                        const checkRestored = async (instanceId, maxAttempts = 40) => {
+                            for (let i = 0; i < maxAttempts; i++) {
+                                try {
+                                    const instance = await vultr.instances.getInstance({ "instance-id": instanceId });
+                                    console.log(`Restore: Attempt ${i+1}/${maxAttempts}: status=${instance.instance.status}, power_status=${instance.instance.power_status}`);
+                                    
+                                    // Server is fully restored when both conditions are met
+                                    if (instance.instance.status === 'active' && instance.instance.power_status === 'running') {
+                                        return true;
+                                    }
+                                    
+                                    // Wait 5 seconds before checking again (longer wait for restore)
+                                    await new Promise(resolve => setTimeout(resolve, 5000));
+                                } catch (error) {
+                                    console.error(`Error checking restore status (attempt ${i+1}/${maxAttempts}):`, error);
+                                }
+                            }
+                            console.log(`Failed to fully restore server after ${maxAttempts} attempts`);
+                            return false;
+                        };
+                    
+                        // For restore, we'll wait longer and check for both active and running status
+                        const restoreSuccess = await checkRestored(process.env.VULTR_INSTANCE_ID);
+                        if (restoreSuccess) {
+                            await interaction.followUp('✅ Server has been successfully restored from snapshot and is running!');
+                        } else {
+                            await interaction.followUp('⚠️ Restore process is in progress but taking longer than expected. Please check Vultr dashboard.');
+                        }
+                    });
                 } catch (error) {
                     console.error('Restore snapshot error details:', error);
                     await interaction.editReply(`❌ Failed to restore snapshot: ${error.message}`);
@@ -190,27 +231,63 @@ client.on('interactionCreate', async interaction => {
                         await new Promise(resolve => setTimeout(resolve, 3000));
                     }
                     
-                    const description = interaction.options.getString('description') || 'Snapshot created via Discord bot';
+                    const description = interaction.options.getString('description') || 'Discord Bot Created Image';
+                    // Update the console log to match actual parameter names
                     console.log('Creating snapshot with parameters:', {
-                        instanceId: process.env.VULTR_INSTANCE_ID,
-                        description: description
+                        "instance-id": process.env.VULTR_INSTANCE_ID,
+                        "description": description
                     });
                     
-                    // Use the same kebab-case format that works for other API methods
+                    // Use snake_case parameter format as required by the snapshots API
                     const snapshot = await vultr.snapshots.createSnapshot({
-                        "instance-id": process.env.VULTR_INSTANCE_ID,
+                        "instance_id": process.env.VULTR_INSTANCE_ID,
                         "description": description
                     });
                     
                     console.log('Snapshot creation response:', JSON.stringify(snapshot, null, 2));
                     
                     if (snapshot && snapshot.snapshot && snapshot.snapshot.id) {
-                        await interaction.editReply(`⏳ Creating snapshot with ID: \`${snapshot.snapshot.id}\`...\n\nThis may take several minutes to complete. The snapshot ID has been captured and can be used for future restore operations.`);
+                        const snapshotId = snapshot.snapshot.id;
+                        await interaction.editReply(`⏳ Creating snapshot with ID: \`${snapshotId}\`...\n\nThis may take several minutes to complete. I'll check on the status and update you.`);
                         
-                        // Provide the ID as a clear suggestion for updating their .env file
-                        setTimeout(async () => {
-                            await interaction.editReply(`✅ Snapshot creation process has started!\n\nID: \`${snapshot.snapshot.id}\`\nDescription: "${description}"\n\nTo use this snapshot for future restores, update your \`.env\` file with:\n\`\`\`\nVULTR_SNAPSHOT_ID=${snapshot.snapshot.id}\n\`\`\``);
-                        }, 5000);
+                        // Function to check snapshot status
+                        const checkSnapshotStatus = async () => {
+                            try {
+                                const response = await vultr.snapshots.getSnapshot({ 'snapshot-id': snapshotId });
+                                console.log(`Snapshot status: ${response.snapshot.status}`);
+                                return response.snapshot.status;
+                            } catch (error) {
+                                console.error('Error checking snapshot status:', error);
+                                return null;
+                            }
+                        };
+                        
+                        // Monitor snapshot creation with periodic status updates
+                        let attempts = 0;
+                        const maxAttempts = 20; // Stop checking after reasonable number of attempts
+                        const checkInterval = 30000; // 30 seconds between checks
+                        
+                        const statusCheck = async () => {
+                            if (attempts >= maxAttempts) {
+                                await interaction.editReply(`⏳ Snapshot creation is still in progress. It may take up to an hour to complete.\n\nID: \`${snapshotId}\`\nDescription: "${description}"\n\nYou can use this ID for future restore operations.`);
+                                return;
+                            }
+                            
+                            attempts++;
+                            const status = await checkSnapshotStatus();
+                            
+                            if (status === 'complete') {
+                                await interaction.editReply(`✅ Snapshot creation completed successfully!\n\nID: \`${snapshotId}\`\nDescription: "${description}"\n\nYou can now use this snapshot for restore operations.`);
+                            } else if (status === 'pending') {
+                                await interaction.editReply(`⏳ Snapshot creation in progress (check ${attempts}/${maxAttempts})...\n\nID: \`${snapshotId}\`\nDescription: "${description}"`);
+                                setTimeout(statusCheck, checkInterval);
+                            } else {
+                                await interaction.editReply(`⚠️ Snapshot status: ${status || 'unknown'}\n\nID: \`${snapshotId}\`\nDescription: "${description}"\n\nPlease check the Vultr dashboard for more details.`);
+                            }
+                        };
+                        
+                        // Start checking after initial delay
+                        setTimeout(statusCheck, 15000);
                     } else {
                         // Something went wrong with the API response
                         console.error('Unexpected snapshot API response format:', snapshot);
