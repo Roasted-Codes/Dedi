@@ -1,13 +1,22 @@
-# Dedi Bot - Discord VPS Management
+# Dedi Bot Simple
 
-A Discord bot for managing Vultr VPS instances, designed to allow gaming communities to easily create, manage, and share game servers.
+A streamlined Discord bot for managing Vultr VPS instances, designed for gaming communities to easily create, manage, and share game servers.
+
+## Overview
+
+This is a simplified version of the original Dedi Bot, redesigned to be:
+- **Easy to understand**: All code in a single file with clear section headers
+- **Simple to maintain**: No complex file structure or abstractions
+- **Straightforward to debug**: Clear error messages and simplified logic
 
 ## Features
 
-- **Instance Management**: Create, start, stop, and check the status of VPS instances
-- **User-Friendly**: Simple commands for non-technical users
-- **Instance Tracking**: Track who created each instance and when
-- **Status Updates**: Real-time updates on instance status
+- **Create Game Servers**: Quickly spin up new servers from snapshots
+- **Manage Instances**: Start, stop, and check server status using friendly dropdown menus
+- **List Servers**: See all active servers and who created them
+- **User Tracking**: Automatically associates servers with their Discord creators
+- **In-memory State**: No file-based storage for simpler operation
+- **User-Friendly Interface**: Select servers by name and description instead of technical IDs
 
 ## Installation
 
@@ -15,7 +24,7 @@ A Discord bot for managing Vultr VPS instances, designed to allow gaming communi
 
 ```bash
 git clone <repository-url>
-cd dedi-bot
+cd dedi-bot-simple
 ```
 
 2. **Install dependencies**
@@ -36,10 +45,10 @@ cp .env.example .env
 4. **Start the bot**
 
 ```bash
-node index.js
+npm start
 ```
 
-## Configuration
+## Environment Variables
 
 Edit the `.env` file with your credentials:
 
@@ -47,90 +56,53 @@ Edit the `.env` file with your credentials:
 |----------|-------------|----------|
 | `DISCORD_TOKEN` | Your Discord bot token from the [Discord Developer Portal](https://discord.com/developers/applications) | Yes |
 | `VULTR_API_KEY` | Your Vultr API key from [Vultr Account](https://my.vultr.com/settings/#settingsapi) | Yes |
+| `VULTR_SNAPSHOT_ID` | ID of the snapshot to use when creating new instances (if not provided, the most recent snapshot will be used) | No |
 | `VULTR_REGION` | Region code for new instances (default: ewr - New Jersey) | No |
 | `VULTR_PLAN` | Instance plan for new instances (default: vc2-1c-1gb) | No |
-| `VULTR_DEFAULT_SNAPSHOT_ID` | Default snapshot ID to use when creating new instances | No |
 
 ## Commands
-
-### User Commands
 
 | Command | Description | Options |
 |---------|-------------|---------|
 | `/list` | List all active game servers | None |
-| `/status` | Check status of a server | `instance-id` (optional) |
+| `/status` | Check status of a server | Shows dropdown of available servers |
 | `/create` | Create a new server from snapshot | `name` (optional) |
-| `/start` | Start a stopped server | `instance-id` (optional) |
-| `/stop` | Stop a running server | `instance-id` (optional) |
+| `/start` | Start a stopped server | Shows dropdown of stopped servers |
+| `/stop` | Stop a running server | Shows dropdown of running servers |
 
-## Project Structure
+## Differences from Original Version
+
+This simplified version:
+
+1. **Consolidates all code into a single file** for easier understanding and debugging
+2. **Uses in-memory state** instead of file-based storage for simplicity
+3. **Reduces the command set** to focus on core functionality
+4. **Simplifies error handling** while maintaining robust operation
+5. **Removes complex abstractions** like the separate wrapper for the Vultr API
+
+## Understanding The Code
+
+The code is organized into clearly labeled sections:
 
 ```
-dedi-bot/
-├── index.js                # Main entry point
-├── commands/               # Command implementations
-│   ├── public/             # End-user commands
-│   └── admin/              # Admin commands (future)
-├── services/               # Business logic
-│   ├── instanceTracker.js  # Track instance metadata
-│   └── vultrService.js     # Vultr API interactions
-├── utils/                  # Helper functions
-│   └── formatters.js       # Message formatting
-└── config/                 # Configuration
-    └── instanceLog.json    # Stores instance metadata
+// ================ CONFIGURATION AND SETUP ================
+// ================ IN-MEMORY STATE MANAGEMENT ================
+// ================ VULTR API FUNCTIONS ================
+// ================ UTILITY FUNCTIONS ================
+// ================ COMMAND DEFINITIONS ================
+// ================ EVENT HANDLERS ================
+// ================ START THE BOT ================
 ```
 
-## Instance Tracking
+This makes it easy to locate specific functionality when debugging or making changes.
 
-The bot tracks instances in `config/instanceLog.json`, storing:
+## How to Use
 
-- Instance ID
-- Creator (Discord user ID and username)
-- Creation time
-- Current status
-- IP address
-- Instance name
-
-This allows users to see who created each server and its current status.
-
-## Extending the Bot
-
-### Adding New Commands
-
-1. Create a new file in `commands/public/` or `commands/admin/`
-2. Export an object with `data` (command definition) and `execute` (handler function)
-3. The command will be automatically loaded when the bot starts
-
-Example command file:
-
-```javascript
-const { SlashCommandBuilder } = require('discord.js');
-
-module.exports = {
-  data: new SlashCommandBuilder()
-    .setName('command-name')
-    .setDescription('Command description'),
-  
-  async execute(interaction) {
-    // Command implementation
-    await interaction.reply('Hello, world!');
-  }
-};
-```
-
-### Adding Admin Commands
-
-Admin commands are stored in `commands/admin/` and should implement permission checks:
-
-```javascript
-// Check if user has admin permissions
-if (!interaction.member.permissions.has('ADMINISTRATOR')) {
-  return interaction.reply({
-    content: 'You need administrator permissions to use this command.',
-    ephemeral: true
-  });
-}
-```
+1. **Invite the bot** to your Discord server using the OAuth2 URL from the Discord Developer Portal.
+2. **Create a server** using the `/create` command (optionally specify a name).
+3. **Check server status** using the `/status` command and selecting your server from the dropdown.
+4. **Stop the server** when not in use with the `/stop` command and selecting from running servers.
+5. **Start the server** again when needed with the `/start` command and selecting from stopped servers.
 
 ## License
 

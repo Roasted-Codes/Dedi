@@ -1,12 +1,19 @@
 {
-  "name": "dedi-bot",
+  "name": "dedi-bot-simple",
   "version": "1.0.0",
-  "description": "",
+  "description": "A simplified Discord bot for managing Vultr VPS instances",
   "main": "index.js",
   "scripts": {
+    "start": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "keywords": [
+    "discord",
+    "bot",
+    "vultr",
+    "vps",
+    "game-server"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
