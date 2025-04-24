@@ -1,38 +1,38 @@
 [general]
 show_welcome = false
 skip_boot_anim = true
+last_viewed_menu_index = 5
+
+[general.snapshots.shortcuts]
+f5 = 'Midship-Lobby'
+f6 = 'Create-Lobby'
 
 [input.bindings]
 port1 = 'keyboard'
 
-[input.peripherals.port1]
-peripheral_type_0 = 1
-peripheral_param_0 = '/home/halo/Desktop/xemu/Iguana_AndSysLinkTags.img'
-
 [display.window]
 startup_size = '640x480'
-
-[display.ui]
-fit = 'center'
+last_width = 1920
+last_height = 1008
 
 [audio]
 volume_limit = 0
 
 [net]
 enable = true
+backend = 'udp'
 
 [net.udp]
 bind_addr = '0.0.0.0:9968'
 remote_addr = '127.0.0.1:34523'
 
-[net.nat]
-forward_ports = [
-    { host = 3074, guest = 3074, protocol = 'udp'}
-    ]
-
 [sys.files]
-bootrom_path = './mcpx_1.0.bin'
-flashrom_path = './complex_4627.bin'
-eeprom_path = './eeprom.bin'
-hdd_path = './xbox_hdd.qcow2'
+bootrom_path = '/home/halo/Desktop/xemu/mcpx_1.0.bin'
+flashrom_path = '/home/halo/Desktop/xemu/complex_4627.bin'
+eeprom_path = '/home/halo/Desktop/xemu/eeprom.bin'
+hdd_path = '/home/halo/Desktop/xemu/xbox_hdd.qcow2'
 dvd_path = '/home/halo/Desktop/xemu/halo2_r1e_xiso.iso'
+
+[perf]
+hard_fpu = false
+
