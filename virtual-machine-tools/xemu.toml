@@ -1,19 +1,25 @@
 [general]
 show_welcome = false
 skip_boot_anim = true
-last_viewed_menu_index = 5
+last_viewed_menu_index = 1
 
 [general.snapshots.shortcuts]
-f5 = 'Midship-Lobby'
-f6 = 'Create-Lobby'
+f6 = 'Auto-Host-Lobby'
 
 [input.bindings]
+port1_driver = 'usb-xbox-gamepad'
 port1 = 'keyboard'
+
+[display]
+renderer = 'NULL'
 
 [display.window]
 startup_size = '640x480'
-last_width = 1920
-last_height = 1008
+last_height = 495
+vsync = false
+
+[display.ui]
+fit = 'center'
 
 [audio]
 volume_limit = 0
@@ -32,7 +38,4 @@ flashrom_path = '/home/halo/Desktop/xemu/complex_4627.bin'
 eeprom_path = '/home/halo/Desktop/xemu/eeprom.bin'
 hdd_path = '/home/halo/Desktop/xemu/xbox_hdd.qcow2'
 dvd_path = '/home/halo/Desktop/xemu/halo2_r1e_xiso.iso'
-
-[perf]
-hard_fpu = false
 
