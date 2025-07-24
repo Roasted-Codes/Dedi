@@ -10,5 +10,5 @@ This project aims to simplify and optimize dedicated servers ("dedis") for Halo 
 
 **Shoutout to Kantanomo, Xbox7887, Mborgerson, and MVC for their contributions to the community**
 
-Gdrive Docker Volumes / Xemu Auto Host Files: [https://drive.google.com/drive/folders/1Q8MMi86fFTOdqOHH28CsXR3Sjl-XTsH3?usp=drive_link
-](https://drive.google.com/drive/folders/1XMyyFqbEm6s1qDCea18XKkALVaTcXfUg?usp=drive_link)
+Google Drive with Project Files / Docker Volumes / Xemu Files / Etc.
+[https://drive.google.com/drive/folders/1IcpwbW_tnCLJxX59wXm6mSvYwbts9s_8?usp=drive_link](https://drive.google.com/drive/folders/1eBk9b13i8mer_syWvWumDvJUhQ6virJF?usp=drive_link)
