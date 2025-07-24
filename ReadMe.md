@@ -9,3 +9,5 @@ This project aims to simplify and optimize dedicated servers ("dedis") for Halo 
 3. Implement container solutions (Games On Whales, Sunshine/Moonlight) for simplified session management
 
 **Shoutout to Kantanomo, Xbox7887, Mborgerson, and MVC for their contributions to the community**
+
+Gdrive Xemu: https://drive.google.com/drive/folders/1Q8MMi86fFTOdqOHH28CsXR3Sjl-XTsH3?usp=drive_link
