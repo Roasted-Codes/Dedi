@@ -1,0 +1,7 @@
+#These are the credentials to access selkies you can customize. They should be stored in a .env file to be safer and not shared with random other people.
+
+#save this file as '.env' in the same directory as the docker-compose.yml file
+
+PASSWD=
+SELKIES_BASIC_AUTH_PASSWORD=
+SELKIES_BASIC_AUTH_USER=

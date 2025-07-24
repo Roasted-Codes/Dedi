@@ -1,0 +1,134 @@
+# Docker Compose configuration for Selkies Desktop + XLink Kai
+
+# Setup:
+# 1. Create a .env file with your passwords (PASSWD, SELKIES_BASIC_AUTH_PASSWORD, SELKIES_BASIC_AUTH_USER)
+# 2. Run: docker-compose up -d
+
+# Volume Configuration:
+# 3. On the docker host machine, you can put the files I like to use for the Xemu Dedi and XLink Kai in the volumes into these directories to share them with the container:
+# docker_xlink_data/_data (for XLink Kai data)
+# docker_selkies_home/_data (for desktop user files including xemu dedi files)
+
+# These files will be accessible inside the container for use with xemu or xlink kai without having to configure them on your own. This is one way you can get files into and out of the container.
+
+# 4. Access desktop at: https://localhost:8080 or http://localhost:34522 (for XLink Kai)
+
+services:
+  selkies-desktop:
+    image: ghcr.io/selkies-project/nvidia-egl-desktop:latest
+    container_name: selkies-desktop
+    restart: unless-stopped
+    
+    # Use host networking for better connectivity
+    network_mode: host
+    
+    # Shared memory for better performance
+    tmpfs:
+      - /dev/shm:rw
+    
+    environment:
+      # Basic display settings
+      - TZ=UTC
+      - DISPLAY_SIZEW=1280
+      - DISPLAY_SIZEH=720
+      - DISPLAY_REFRESH=10
+      - DISPLAY_DPI=96
+      - DISPLAY_CDEPTH=24
+      
+      # Authentication settings - using .env variables
+      - PASSWD=${PASSWD}
+      - SELKIES_BASIC_AUTH_PASSWORD=${SELKIES_BASIC_AUTH_PASSWORD}
+      - SELKIES_BASIC_AUTH_USER=${SELKIES_BASIC_AUTH_USER}
+      - SELKIES_ENABLE_BASIC_AUTH=true
+
+      # Video encoding settings (CPU-based)
+      - SELKIES_ENCODER=x264enc
+      - SELKIES_VIDEO_BITRATE=100
+      - SELKIES_FRAMERATE=30
+      - SELKIES_AUDIO_BITRATE=32
+      
+      # WebRTC settings
+      - SELKIES_ENABLE_RESIZE=false
+      - SELKIES_ENABLE_HTTPS=true
+
+      # GPU settings (uncomment for NVIDIA GPU support)
+      # - VGL_DISPLAY=egl
+      
+      # Alternative VNC (uncomment to use KasmVNC instead)
+      # - KASMVNC_ENABLE=true
+      # - KASMVNC_THREADS=0
+      
+      # Network optimization (uncomment for unstable connections)
+      # - SELKIES_CONGESTION_CONTROL=true
+      
+      # TURN server settings (for remote access outside your network)
+      # - SELKIES_TURN_HOST=turn.example.com
+      # - SELKIES_TURN_PORT=3478
+      # - SELKIES_TURN_PROTOCOL=udp
+      # - SELKIES_TURN_TLS=false
+      # - TURN_MIN_PORT=65534
+      # - TURN_MAX_PORT=65535
+      # - SELKIES_TURN_SHARED_SECRET=n0TaRealCoTURNAuthSecretThatIsSixtyFourLengthsLongPlaceholdPlace
+      # - SELKIES_TURN_USERNAME=username
+      # - SELKIES_TURN_PASSWORD=mypasswd
+      # - SELKIES_TURN_REST_URI=http://localhost:8008
+      
+    # Persistent storage volumes
+    volumes:
+      - docker_selkies_home:/home/ubuntu
+      - docker_selkies_etc:/etc
+      - docker_selkies_opt:/opt
+      - docker_selkies_usr_local:/usr/local
+    
+    # Required permissions for desktop functionality
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - NET_RAW
+    
+    security_opt:
+      - seccomp:unconfined
+    
+  xlink-kai:
+    image: ich777/xlinkkaievolution
+    container_name: xlink-kai
+    restart: unless-stopped
+    
+    environment:
+      - INTERFACE_NAME=eth0
+      - UMASK=000
+      - UID=1000  # Change this to your user ID
+      - GID=1000  # Change this to your group ID
+    
+    # Network tunneling requires privileged access
+    privileged: true
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    
+    network_mode: host
+    
+    security_opt:
+      - seccomp:unconfined
+    
+    volumes:
+      - docker_xlink_data:/xlinkkaievolution
+    
+    ports:
+      - "34522:34522/udp"
+      - "34523:34523/tcp"
+
+# External volumes - create these with: docker volume create volume_name
+volumes:
+  docker_selkies_home:
+    external: true
+  docker_selkies_etc:
+    external: true
+  docker_selkies_opt:
+    external: true
+  docker_selkies_usr_local:
+    external: true
+  docker_xlink_data:
+    external: true
+ 
