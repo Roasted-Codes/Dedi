@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  selkies-desktop:
+    image: ghcr.io/selkies-project/nvidia-egl-desktop:latest
+    container_name: selkies-desktop
+    restart: unless-stopped
+    
+    # Use host networking for better connectivity
+    network_mode: host
+    
+    # Use tmpfs for shared memory
+    tmpfs:
+      - /dev/shm:rw
+    
+    environment:
+      # Basic display settings
+      - TZ=UTC
+      - DISPLAY_SIZEW=1280
+      - DISPLAY_SIZEH=720
+      - DISPLAY_REFRESH=10
+      - DISPLAY_DPI=96
+      - DISPLAY_CDEPTH=24
+      
+      # Authentication settings
+      - PASSWD=selkies123
+      - SELKIES_BASIC_AUTH_PASSWORD=selkies123
+      - SELKIES_BASIC_AUTH_USER=ubuntu
+      - SELKIES_ENABLE_BASIC_AUTH=true
+      
+      # CPU-only software encoding (no GPU required)
+      - SELKIES_ENCODER=x264enc
+      - SELKIES_VIDEO_BITRATE=2000
+      - SELKIES_FRAMERATE=10
+      - SELKIES_AUDIO_BITRATE=6400000
+      
+      # WebRTC settings
+      - SELKIES_ENABLE_RESIZE=false
+      - SELKIES_ENABLE_HTTPS=false
+      
+    # Volumes for persistence
+    volumes:
+      - selkies_home:/home/ubuntu
+      - selkies_usr_local:/usr/local
+      - selkies_opt:/opt
+      - selkies_etc:/etc
+      
+    # Add capabilities for system access and network operations
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - NET_RAW
+    
+    # Security settings
+    security_opt:
+      - seccomp:unconfined
+
+volumes:
+  selkies_home:
+    driver: local
+  selkies_usr_local:
+    driver: local
+  selkies_opt:
+    driver: local
+  selkies_etc:
+    driver: local 
