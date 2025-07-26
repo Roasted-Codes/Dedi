@@ -18,4 +18,7 @@ yarn-error.log*
 *.ntvs*
 *.njsproj
 *.sln
-*.sw? 
+*.sw?
+
+# Docker volumes
+/Users/james/Desktop/dedi/Docker-Dedi-v.1.1.0
