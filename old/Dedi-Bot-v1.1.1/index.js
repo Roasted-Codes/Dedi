@@ -1,5 +1,7 @@
 /**
- * Last Updated: March 19, 2024 15:30 UTC
+ * NOTE: Make sure your Vultr API key settings allow requests from this server's IP address, or commands will fail!
+ *
+ * Last Updated: June 7, 2024 16:00 UTC
  */
 
 /**
@@ -451,9 +453,13 @@ function formatInstanceDetails(instance, vultrInstance = null) {
     
     if (vultrInstance.main_ip) {
       message += `\n> IP: \`${vultrInstance.main_ip}\``;
+      message += `\n> Linux Desktop: https://${vultrInstance.main_ip}:8080`;
+      message += `\n> Xlink Kai: http://${vultrInstance.main_ip}:34522`;
     }
   } else if (instance?.ip) {
     message += `\n> IP: \`${instance.ip}\``;
+    message += `\n> Linux Desktop: https://${instance.ip}:8080`;
+    message += `\n> Xlink Kai: http://${instance.ip}:34522`;
   }
   
   // Add creator info if available
@@ -1026,7 +1032,7 @@ client.on('interactionCreate', async interaction => {
       return interaction.editReply(
         `✅ Server "${serverName}" has been destroyed.\n` +
         `Thanks for being a Real One! 🙏\n` +
-        `This session total cost was approximately ${formattedCost}.`
+        `We have been too lazy to program the API to calculate the cost of the server but it's probably around .11 cents an hour.`
       );
     } catch (error) {
       console.error('Error destroying server:', error);

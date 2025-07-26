@@ -1,0 +1,17 @@
+[Unit]
+Description=Dedi Discord Bot
+After=network.target
+
+[Service]
+Type=simple
+User=bot
+WorkingDirectory=/home/bot/Dedi/dedi-bot-simple
+ExecStart=/usr/bin/node index.js
+Restart=on-failure
+RestartSec=10
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=dedi-bot
+
+[Install]
+WantedBy=multi-user.target 
