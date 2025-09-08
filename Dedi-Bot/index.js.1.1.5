@@ -1,0 +1,1236 @@
+/**
+ * NOTE: Make sure your Vultr API key settings allow requests from this server's IP address, or commands will fail!
+ * 
+ * EXCLUDE_SNAPSHOT_ID: Set this environment variable to the snapshot ID of any server you want to exclude
+ * from bot management (e.g., the Discord bot server itself). Instances created from this snapshot will
+ * never appear in lists, status checks, or be available for start/stop/destroy operations.
+ *
+ * Last Updated: June 7, 2024 16:00 UTC
+ */
+
+/**
+ * Dedi Bot Simple - A streamlined Discord bot for managing Vultr VPS instances
+ * 
+ * This single-file implementation contains all functionality in one place for
+ * maximum simplicity and ease of debugging.
+ */
+
+// ================ CONFIGURATION AND SETUP ================
+
+// Environment variables
+require('dotenv').config();
+
+// Dependencies
+const { 
+  Client, 
+  GatewayIntentBits, 
+  Collection, 
+  REST, 
+  Routes,
+  SlashCommandBuilder,
+  ActionRowBuilder,
+  StringSelectMenuBuilder
+} = require('discord.js');
+const VultrNode = require('@vultr/vultr-node');
+
+// Initialize Discord client
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
+
+// Initialize Vultr client
+const vultr = VultrNode.initialize({
+  apiKey: process.env.VULTR_API_KEY
+});
+
+// ================ IN-MEMORY STATE MANAGEMENT ================
+
+// Simple in-memory tracking of instances (replaces file-based instanceTracker)
+const instanceState = {
+  instances: [],
+  
+  // Add or update an instance
+  trackInstance: function(instanceId, userId, username, status, metadata = {}) {
+    const timestamp = new Date();
+    const existingIndex = this.instances.findIndex(i => i.id === instanceId);
+    
+    const instanceData = {
+      id: instanceId,
+      creator: {
+        id: userId,
+        username
+      },
+      createdAt: timestamp.toISOString(),
+      status: status || 'creating',
+      ip: metadata.ip || null,
+      name: metadata.name || `${username}'s Server`,
+      lastUpdated: timestamp.toISOString()
+    };
+    
+    if (existingIndex >= 0) {
+      this.instances[existingIndex] = {
+        ...this.instances[existingIndex],
+        ...instanceData
+      };
+    } else {
+      this.instances.push(instanceData);
+    }
+    
+    return instanceData;
+  },
+  
+  // Update instance status
+  updateInstance: function(instanceId, status, metadata = {}) {
+    const instanceIndex = this.instances.findIndex(i => i.id === instanceId);
+    
+    if (instanceIndex >= 0) {
+      this.instances[instanceIndex] = {
+        ...this.instances[instanceIndex],
+        status,
+        lastUpdated: new Date().toISOString(),
+        ...metadata
+      };
+      
+      return this.instances[instanceIndex];
+    }
+    
+    return null;
+  },
+  
+  // Get all active instances
+  getActiveInstances: function() {
+    return this.instances.filter(i => 
+      i.status !== 'terminated' && i.status !== 'destroyed'
+    );
+  },
+  
+  // Get a specific instance
+  getInstance: function(instanceId) {
+    return this.instances.find(i => i.id === instanceId);
+  },
+  
+  // Get instances for a specific user
+  getUserInstances: function(userId) {
+    return this.instances.filter(i => i.creator.id === userId);
+  }
+};
+
+// Add server creation state management
+const serverCreationState = new Map();
+
+// ================ VULTR API FUNCTIONS ================
+
+/**
+ * Get information about a specific instance (returns null for excluded instances)
+ */
+async function getInstance(instanceId) {
+  try {
+    const response = await vultr.instances.getInstance({ 
+      "instance-id": instanceId 
+    });
+    const instance = response.instance;
+    
+    // Check if this instance should be excluded
+    const excludeSnapshotId = process.env.EXCLUDE_SNAPSHOT_ID;
+    if (excludeSnapshotId && instance.snapshot_id === excludeSnapshotId) {
+      console.log(`Access denied to excluded instance ${instanceId} (created from snapshot ${excludeSnapshotId})`);
+      return null;
+    }
+    
+    return instance;
+  } catch (error) {
+    console.error('Error getting instance:', error);
+    throw error;
+  }
+}
+
+/**
+ * List all instances in the Vultr account (excluding instances from EXCLUDE_SNAPSHOT_ID)
+ */
+async function listInstances() {
+  try {
+    const response = await vultr.instances.listInstances();
+    const instances = response.instances || [];
+    
+    // Filter out excluded instances if EXCLUDE_SNAPSHOT_ID is set
+    const excludeSnapshotId = process.env.EXCLUDE_SNAPSHOT_ID;
+    if (excludeSnapshotId) {
+      const filtered = instances.filter(instance => instance.snapshot_id !== excludeSnapshotId);
+      const excludedCount = instances.length - filtered.length;
+      if (excludedCount > 0) {
+        console.log(`Filtered out ${excludedCount} instance(s) created from excluded snapshot ${excludeSnapshotId}`);
+      }
+      return filtered;
+    }
+    
+    return instances;
+  } catch (error) {
+    console.error('Error listing instances:', error);
+    throw error;
+  }
+}
+
+/**
+ * Start an instance
+ */
+async function startInstance(interaction, instanceId) {
+  try {
+    await interaction.editReply({
+      content: '🔄 Starting the server. This may take a few minutes...',
+      components: []
+    });
+
+    await vultr.instances.startInstance({ "instance-id": instanceId });
+
+    const success = await waitForInstanceStatus(instanceId, 'running');
+    if (success) {
+      instanceState.updateInstance(instanceId, 'running');
+      interaction.editReply('✅ Server started successfully!');
+    } else {
+      interaction.editReply('❌ Failed to confirm the server has started. Please check its status manually.');
+    }
+  } catch (error) {
+    console.error('Error starting server:', error);
+    interaction.editReply('❌ There was an error starting the server.');
+  }
+}
+
+/**
+ * Stop an instance
+ */
+async function stopInstance(interaction, instanceId) {
+  try {
+    await interaction.editReply({
+      content: '🔄 Stopping the server. This may take a few minutes...',
+      components: []
+    });
+
+    await vultr.instances.haltInstance({ "instance-id": instanceId });
+
+    const success = await waitForInstanceStatus(instanceId, 'stopped');
+    if (success) {
+      instanceState.updateInstance(instanceId, 'stopped');
+      interaction.editReply('✅ Server stopped successfully!');
+    } else {
+      interaction.editReply('❌ Failed to confirm the server has stopped. Please check its status manually.');
+    }
+  } catch (error) {
+    console.error('Error stopping server:', error);
+    interaction.editReply('❌ There was an error stopping the server.');
+  }
+}
+
+async function waitForInstanceStatus(instanceId, targetPowerStatus, timeout = 15 * 60 * 1000) {
+  const startTime = Date.now();
+  const checkInterval = 15000; // 15 seconds
+
+  while (Date.now() - startTime < timeout) {
+    try {
+      const instance = await getInstance(instanceId);
+      if (!instance) {
+        console.log(`Instance ${instanceId} is excluded from management`);
+        return false; // Can't wait for excluded instance
+      }
+      console.log(`Waiting for status: ${instance.power_status}, expecting: ${targetPowerStatus}`);
+      if (instance.power_status === targetPowerStatus) {
+        return true;
+      }
+    } catch (error) {
+      console.error(`Error checking instance status for ${instanceId}:`, error);
+    }
+    await new Promise(resolve => setTimeout(resolve, checkInterval));
+  }
+  return false;
+}
+
+/**
+ * Get all snapshots
+ */
+async function getSnapshots() {
+  try {
+    const response = await vultr.snapshots.listSnapshots();
+    // Sort snapshots by date (newest first)
+    const snapshots = response.snapshots || [];
+    snapshots.sort((a, b) => new Date(b.date_created) - new Date(a.date_created));
+    return snapshots;
+  } catch (error) {
+    console.error('Error getting snapshots:', error);
+    throw error;
+  }
+}
+
+/**
+ * Fetches all Vultr regions and organizes them by continent and country
+ * Following OpenAPI spec exactly
+ */
+async function getGroupedRegions(vultrClient) {
+  try {
+    const response = await vultrClient.regions.listRegions();
+    const regions = response.regions || [];
+    
+    // Debug log to see all regions
+    console.log('All available regions:', regions.map(r => ({
+      id: r.id,
+      city: r.city,
+      country: r.country,
+      continent: r.continent,
+      options: r.options
+    })));
+    
+    const grouped = {};
+    for (const region of regions) {
+      // Only include regions that support the required options
+      const hasRequiredOptions = region.options && region.options.includes('kubernetes');
+      
+      if (hasRequiredOptions) {
+        const continent = region.continent || 'Other';
+        const country = region.country || 'Other';
+        
+        if (!grouped[continent]) grouped[continent] = {};
+        if (!grouped[continent][country]) grouped[continent][country] = [];
+        
+        grouped[continent][country].push({
+          id: region.id,
+          city: region.city,
+          country: region.country,
+          continent: region.continent,
+          options: region.options
+        });
+      }
+    }
+
+    // Debug log to see grouped regions
+    console.log('Grouped regions:', JSON.stringify(grouped, null, 2));
+    
+    return grouped;
+  } catch (error) {
+    console.error('Error fetching regions:', error);
+    throw error;
+  }
+}
+
+/**
+ * Create a new instance from a snapshot with specified region
+ * @param {string} snapshotId - The ID of the snapshot to create the instance from
+ * @param {string} label - The name/label for the new instance
+ * @param {string} region - The region where the instance should be deployed
+ * @returns {Promise<Object>} The created instance object
+ */
+async function createInstanceFromSnapshot(snapshotId, label, region) {
+  try {
+    // Log the creation parameters for debugging
+    console.log(`Creating instance with params:`, {
+      snapshot_id: snapshotId,
+      label,
+      region: region || process.env.VULTR_REGION || "dfw",
+      plan: process.env.VULTR_PLAN || "vc2-1c-1gb"
+    });
+    
+    // Create the instance with the specified region
+    const response = await vultr.instances.createInstance({
+      "snapshot_id": snapshotId,
+      "label": label,
+      "region": region || process.env.VULTR_REGION || "dfw",
+      "plan": process.env.VULTR_PLAN || "vc2-1c-1gb"
+    });
+    
+    console.log("Create instance response:", JSON.stringify(response, null, 2));
+
+    // Configure firewall if enabled in environment variables
+    if (process.env.VULTR_FIREWALL_ENABLED === 'true') {
+      try {
+        const firewallGroupId = process.env.VULTR_FIREWALL_GROUP_ID;
+        
+        if (!firewallGroupId) {
+          console.error('VULTR_FIREWALL_GROUP_ID not set in environment variables');
+          return response.instance;
+        }
+
+        // Wait for instance to be active before attaching firewall
+        console.log('Waiting for instance to be active before attaching firewall...');
+        const isActive = await waitForInstanceStatus(response.instance.id, 'running', 5 * 60 * 1000); // 5 minute timeout
+        
+        if (isActive) {
+          await vultr.instances.updateInstance({
+            "instance-id": response.instance.id,
+            "firewall_group_id": firewallGroupId
+          });
+          
+          console.log(`Firewall group ${firewallGroupId} attached to instance ${response.instance.id}`);
+        } else {
+          console.error('Instance did not become active in time, firewall not attached');
+        }
+      } catch (firewallError) {
+        console.error('Error configuring firewall:', firewallError);
+      }
+    }
+    
+    return response.instance;
+  } catch (error) {
+    console.error('Error creating instance from snapshot:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get billing information for an instance
+ */
+async function getInstanceBilling(instanceId) {
+  try {
+    // Get billing history
+    const response = await vultr.billing.listBillingHistory();
+    
+    // Filter charges for this instance and calculate total
+    let totalCost = 0;
+    if (response && response.billing_history) {
+      const instanceCharges = response.billing_history.filter(charge => 
+        charge.description.toLowerCase().includes(instanceId.toLowerCase())
+      );
+      totalCost = instanceCharges.reduce((sum, charge) => sum + parseFloat(charge.amount), 0);
+    }
+    
+    return totalCost;
+  } catch (error) {
+    console.error('Error getting billing information:', error);
+    return 0;
+  }
+}
+
+/**
+ * Delete an instance
+ */
+async function deleteInstance(instanceId) {
+  try {
+    await vultr.instances.deleteInstance({
+      "instance-id": instanceId
+    });
+    return true;
+  } catch (error) {
+    console.error('Error deleting instance:', error);
+    throw error;
+  }
+}
+
+// ================ UTILITY FUNCTIONS ================
+
+/**
+ * Format instance status for display
+ */
+function formatStatus(instance) {
+  let statusEmoji = '⚪';
+  
+  if (instance.power_status === 'running') {
+    statusEmoji = '🟢';
+  } else if (instance.power_status === 'stopped') {
+    statusEmoji = '🔴';
+  } else if (instance.status === 'pending') {
+    statusEmoji = '🟡';
+  }
+  
+  return {
+    emoji: statusEmoji,
+    label: instance.power_status || instance.status
+  };
+}
+
+/**
+ * Format a list of instances for display in Discord
+ */
+function formatInstanceList(instances) {
+  if (!instances || instances.length === 0) {
+    return '📃 **Server List**\nNo active servers found.';
+  }
+  
+  let message = '📃 **Server List**\n';
+  
+  instances.forEach(instance => {
+    const status = formatStatus(instance);
+    const createdAt = new Date(instance.createdAt).toLocaleString();
+    
+    message += `\n${status.emoji} **${instance.name}**`;
+    message += `\n> Status: ${status.label}`;
+    
+    if (instance.ip) {
+      message += `\n> IP: \`${instance.ip}\``;
+    }
+    
+    message += `\n> Created by: ${instance.creator.username}`;
+    message += `\n> Created: ${createdAt}`;
+    message += '\n';
+  });
+  
+  return message;
+}
+
+/**
+ * Format an instance for display in Discord
+ */
+function formatInstanceDetails(instance, vultrInstance = null) {
+  const status = formatStatus(vultrInstance || instance);
+  let message = `🖥️ **Server Details**\n`;
+  
+  // Use label instead of name, with fallback
+  const serverName = (vultrInstance?.label || instance?.label || instance?.name || 'Unnamed Server');
+  message += `\n${status.emoji} **${serverName}**`;
+  message += `\n> Status: ${status.label}`;
+  
+  // Add Vultr-specific details if available
+  if (vultrInstance) {
+    message += `\n> Region: ${vultrInstance.region}`;
+    
+    if (vultrInstance.main_ip) {
+      message += `\n> Linux Remote Desktop: https://${vultrInstance.main_ip}:8080`;
+      message += `\n> Xlink Kai: http://${vultrInstance.main_ip}:34522`;
+    }
+  } else if (instance?.ip) {
+    message += `\n> Region: ${instance.region || 'Unknown'}`;
+    message += `\n> Linux Remote Desktop: https://${instance.ip}:8080`;
+    message += `\n> Xlink Kai: http://${instance.ip}:34522`;
+  }
+  
+  return message;
+}
+
+/**
+ * Automatically poll instance status and update the Discord message when ready
+ * OpenAPI-compliant implementation with proper error handling and unlimited polling
+ */
+async function startInstanceStatusPolling(instanceId, serverName, region, interaction, message) {
+  console.log(`Starting status polling for instance ${instanceId}`);
+  
+  let attempts = 0;
+  const maxWaitTime = 30 * 60 * 1000; // 30 minutes absolute maximum
+  const startTime = Date.now();
+  
+  const pollStatus = async () => {
+    attempts++;
+    const elapsedMinutes = Math.floor((Date.now() - startTime) / 60000);
+    
+    // Hard stop at 30 minutes (reasonable for any cloud instance)
+    if (Date.now() - startTime > maxWaitTime) {
+      const timeoutMessage = 
+        `⏰ Server "${serverName}" exceeded 30-minute startup limit.\n` +
+        `📊 Use \`/status\` to check manually or contact support.\n` +
+        `Don't forget to use /destroy to delete your server when you're done!`;
+      
+      await interaction.editReply(timeoutMessage);
+      console.log(`❌ Instance ${instanceId} polling timeout after 30 minutes`);
+      return;
+    }
+    
+    try {
+      // Call GET /instances/{instance-id} per OpenAPI spec
+      const instance = await getInstance(instanceId);
+      if (!instance) {
+        console.log(`Instance ${instanceId} is excluded from management - stopping status polling`);
+        await interaction.editReply('❌ This server is not available for management.');
+        return;
+      }
+      const status = formatStatus(instance);
+      
+      console.log(`Poll ${attempts} (${elapsedMinutes}min): status=${instance.status}, power=${instance.power_status}, ip=${instance.main_ip}`);
+      
+      // Update tracking
+      instanceState.updateInstance(instanceId, instance.power_status, {
+        ip: instance.main_ip
+      });
+      
+      // Server is ready when: status=active, power_status=running, has real IP
+      if (instance.status === 'active' && 
+          instance.power_status === 'running' && 
+          instance.main_ip && 
+          instance.main_ip !== '0.0.0.0' &&
+          instance.main_ip !== '') {
+        
+        // SUCCESS - Server is fully ready
+        const finalMessage = 
+          `✅ Server "${serverName}" is now READY in ${region.toUpperCase()}! 🎉\n\n` +
+          `🖥️ **Connection Details:**\n` +
+          `> Linux Remote Desktop: https://${instance.main_ip}:8080\n` +
+          `> Xlink Kai: http://${instance.main_ip}:34522\n` +
+          `> IP Address: \`${instance.main_ip}\`\n\n` +
+          `🎮 Your server is ready for gaming!\n` +
+          `⏱️ Total setup time: ${elapsedMinutes} minutes\n` +
+          `Don't forget to use /destroy to delete your server when you're done!`;
+        
+        await interaction.editReply(finalMessage);
+        console.log(`✅ Instance ${instanceId} ready after ${elapsedMinutes} minutes!`);
+        return; // Stop polling
+        
+      } else if (instance.status === 'active' && instance.power_status === 'stopped') {
+        // Instance is created but stopped - start it (OpenAPI compliant)
+        console.log(`Instance ${instanceId} is stopped, attempting to start...`);
+        
+        try {
+          // POST /instances/{instance-id}/start per OpenAPI spec (no body)
+          await vultr.instances.startInstance({
+            "instance-id": instanceId
+          });
+          console.log(`Start command sent for instance ${instanceId}`);
+        } catch (startError) {
+          console.error(`Error starting instance ${instanceId}:`, startError);
+        }
+        
+        // Continue polling after start attempt
+        const progressMessage = 
+          `✅ Server "${serverName}" creation in ${region.toUpperCase()}!\n` +
+          `⏳ Status: ${status.emoji} Starting server... (${elapsedMinutes}min)\n` +
+          `📊 Auto-checking until ready...\n` +
+          `💡 Server will show connection details when ready\n` +
+          `Don't forget to use /destroy when done!`;
+        
+        await interaction.editReply(progressMessage);
+        setTimeout(pollStatus, 45000); // Check again in 45 seconds
+        
+      } else {
+        // Still creating/pending - show progress
+        const progressMessage = 
+          `✅ Server "${serverName}" creation in ${region.toUpperCase()}!\n` +
+          `⏳ Status: ${status.emoji} ${status.label} (${elapsedMinutes}min elapsed)\n` +
+          `📊 Auto-checking until ready...\n` +
+          `💡 Server will show connection details when ready\n` +
+          `Don't forget to use /destroy when done!`;
+        
+        await interaction.editReply(progressMessage);
+        setTimeout(pollStatus, 45000); // Check again in 45 seconds
+      }
+      
+    } catch (error) {
+      console.error(`Error polling instance ${instanceId}:`, error);
+      
+      // Continue trying unless we hit time limit
+      if (Date.now() - startTime < maxWaitTime) {
+        setTimeout(pollStatus, 45000);
+      } else {
+        const errorMessage = 
+          `❌ Unable to monitor server "${serverName}" (API errors).\n` +
+          `📊 Use \`/status\` to check manually.\n` +
+          `Don't forget to use /destroy when done!`;
+        
+        await interaction.editReply(errorMessage);
+      }
+    }
+  };
+  
+  // Start first poll after 10 seconds
+  setTimeout(pollStatus, 10000);
+}
+
+// ================ COMMAND DEFINITIONS ================
+
+// Collection to store command handlers
+client.commands = new Collection();
+
+// Create the /list command
+const listCommand = {
+  data: new SlashCommandBuilder()
+    .setName('list')
+    .setDescription('List all active game servers'),
+  
+  async execute(interaction) {
+    await interaction.deferReply();
+    
+    try {
+      // Try to get instances from Vultr API to ensure our tracking is up to date
+      try {
+        const vultrInstances = await listInstances();
+        
+        // Update our tracked instances based on Vultr's data
+        const activeInstances = instanceState.getActiveInstances();
+        
+        vultrInstances.forEach(vultrInstance => {
+          const trackedInstance = activeInstances.find(i => i.id === vultrInstance.id);
+          
+          if (trackedInstance) {
+            // Update existing instance
+            instanceState.updateInstance(vultrInstance.id, vultrInstance.power_status, {
+              ip: vultrInstance.main_ip
+            });
+          } else if (vultrInstance.power_status === 'running') {
+            // Add new instance we're not tracking yet
+            instanceState.trackInstance(
+              vultrInstance.id,
+              'unknown',
+              'Unknown',
+              vultrInstance.power_status,
+              {
+                ip: vultrInstance.main_ip,
+                name: vultrInstance.label || 'Unknown Server'
+              }
+            );
+          }
+        });
+        
+        // Mark tracked instances that don't exist in Vultr as terminated
+        activeInstances.forEach(trackedInstance => {
+          const vultrInstance = vultrInstances.find(i => i.id === trackedInstance.id);
+          if (!vultrInstance) {
+            instanceState.updateInstance(trackedInstance.id, 'terminated');
+          }
+        });
+      } catch (error) {
+        console.error('Error syncing with Vultr API:', error);
+        // Continue with local data if Vultr API fails
+      }
+      
+      // Get the refreshed list of active instances
+      const activeInstances = instanceState.getActiveInstances();
+      
+      // Format and send the response
+      const formattedList = formatInstanceList(activeInstances);
+      return interaction.editReply(formattedList);
+    } catch (error) {
+      console.error('Error executing list command:', error);
+      return interaction.editReply('❌ There was an error trying to list the servers.');
+    }
+  }
+};
+
+// Create the /status command
+const statusCommand = {
+  data: new SlashCommandBuilder()
+    .setName('status')
+    .setDescription('Check the status of a game server'),
+  
+  async execute(interaction) {
+    await interaction.deferReply();
+    
+    try {
+      // Get all instances first
+      const vultrInstances = await listInstances();
+      
+      if (!vultrInstances || vultrInstances.length === 0) {
+        return interaction.editReply('No servers found.');
+      }
+
+      // Create select menu options from instances
+      const options = vultrInstances.map(instance => ({
+        label: instance.label || 'Unnamed Server',
+        description: `Status: ${instance.power_status} | IP: ${instance.main_ip} | Region: ${instance.region}`,
+        value: instance.id
+      }));
+
+      // Create the select menu
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId('select_server')
+            .setPlaceholder('Select a server to check')
+            .addOptions(options)
+        );
+
+      // Send message with select menu
+      return interaction.editReply({
+        content: 'Choose a server to check its status:',
+        components: [row]
+      });
+    } catch (error) {
+      console.error('Error executing status command:', error);
+      return interaction.editReply('❌ There was an error checking server status.');
+    }
+  }
+};
+
+// Create the /start command
+const startCommand = {
+  data: new SlashCommandBuilder()
+    .setName('start')
+    .setDescription('Start a game server'),
+  
+  async execute(interaction) {
+    await interaction.deferReply();
+    
+    try {
+      // Get all instances that are stopped
+      const vultrInstances = await listInstances();
+      const stoppedInstances = vultrInstances.filter(instance => 
+        instance.power_status === 'stopped'
+      );
+      
+      if (!stoppedInstances || stoppedInstances.length === 0) {
+        return interaction.editReply('No stopped servers found. All servers may already be running.');
+      }
+
+      // Create select menu options from stopped instances
+      const options = stoppedInstances.map(instance => ({
+        label: instance.label || 'Unnamed Server',
+        description: `Status: ${instance.power_status} | IP: ${instance.main_ip} | Region: ${instance.region}`,
+        value: instance.id
+      }));
+
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId('start_server')
+            .setPlaceholder('Select a server to start')
+            .addOptions(options)
+        );
+
+      return interaction.editReply({
+        content: 'Choose a server to start:',
+        components: [row]
+      });
+    } catch (error) {
+      console.error('Error executing start command:', error);
+      return interaction.editReply('❌ There was an error listing servers.');
+    }
+  }
+};
+
+// Create the /stop command
+const stopCommand = {
+  data: new SlashCommandBuilder()
+    .setName('stop')
+    .setDescription('Stop a game server'),
+  
+  async execute(interaction) {
+    await interaction.deferReply();
+    
+    try {
+      // Get all instances that are running
+      const vultrInstances = await listInstances();
+      const runningInstances = vultrInstances.filter(instance => 
+        instance.power_status === 'running'
+      );
+      
+      if (!runningInstances || runningInstances.length === 0) {
+        return interaction.editReply('No running servers found. All servers may already be stopped.');
+      }
+
+      // Create select menu options from running instances
+      const options = runningInstances.map(instance => ({
+        label: instance.label || 'Unnamed Server',
+        description: `Status: ${instance.power_status} | IP: ${instance.main_ip} | Region: ${instance.region}`,
+        value: instance.id
+      }));
+
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId('stop_server')
+            .setPlaceholder('Select a server to stop')
+            .addOptions(options)
+        );
+
+      return interaction.editReply({
+        content: 'Choose a server to stop:',
+        components: [row]
+      });
+    } catch (error) {
+      console.error('Error executing stop command:', error);
+      return interaction.editReply('❌ There was an error listing servers.');
+    }
+  }
+};
+
+// Create the /create command
+const createCommand = {
+  data: new SlashCommandBuilder()
+    .setName('create')
+    .setDescription('Create a new game server')
+    .addStringOption(option => 
+      option
+        .setName('name')
+        .setDescription('A name for your server')
+        .setRequired(false))
+    .addStringOption(option =>
+      option
+        .setName('city')
+        .setDescription('City to create server in (optional - defaults to Dallas)')
+        .setRequired(false)
+        .setAutocomplete(true)),
+  
+  async execute(interaction) {
+    await interaction.deferReply();
+    
+    try {
+      // Get server name from command options or use default
+      const serverName = interaction.options.getString('name') || 
+                        `${interaction.user.username}'s Server`;
+      
+      // Get city from command options or use default (DFW)
+      const selectedCity = interaction.options.getString('city') || 'dfw';
+      
+      await interaction.editReply('🔄 Creating your server...');
+      
+      // Get available snapshots
+      const snapshots = await getSnapshots();
+      
+      if (!snapshots || snapshots.length === 0) {
+        return interaction.editReply('❌ No snapshots available to create a server from.');
+      }
+      
+      // Use the snapshot ID from .env or the most recent snapshot
+      const snapshotId = process.env.VULTR_SNAPSHOT_ID || snapshots[0].id;
+      
+      // Create the instance with the selected region
+      const instance = await createInstanceFromSnapshot(snapshotId, serverName, selectedCity);
+      
+      if (!instance || !instance.id) {
+        return interaction.editReply('❌ Failed to create the server. Please try again later.');
+      }
+      
+      // Track the new instance
+      instanceState.trackInstance(
+        instance.id,
+        interaction.user.id,
+        interaction.user.username,
+        instance.status || 'creating',
+        {
+          ip: instance.main_ip,
+          name: serverName,
+          region: selectedCity
+        }
+      );
+      
+      // Initial response
+      const initialMessage = await interaction.editReply(
+        `✅ Server "${serverName}" creation started in ${selectedCity.toUpperCase()}!\n` +
+        `⏳ Please be patient - server creation typically takes 15 minutes.\n` +
+        `📊 Checking status automatically...\n` +
+        `💡 Tip: The server will be ready when its status shows as "running"\n` +
+        `Don't forget to use /destroy to delete your server when you're done!`
+      );
+
+      // Start automatic status polling
+      startInstanceStatusPolling(instance.id, serverName, selectedCity, interaction, initialMessage);
+
+      return; // Don't return the editReply, let the polling handle updates
+      
+    } catch (error) {
+      console.error('Error executing create command:', error);
+      return interaction.editReply('❌ There was an error creating the server.');
+    }
+  }
+};
+
+// Add autocomplete handler for city selection
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isAutocomplete()) return;
+
+  if (interaction.commandName === 'create') {
+    try {
+      const focusedValue = interaction.options.getFocused();
+      const groupedRegions = await getGroupedRegions(vultr);
+      
+      // Flatten all cities and filter based on input
+      const cities = Object.values(groupedRegions)
+        .flatMap(countries => Object.values(countries))
+        .flat()
+        .filter(city => 
+          city.city.toLowerCase().includes(focusedValue.toLowerCase()) ||
+          city.id.toLowerCase().includes(focusedValue.toLowerCase())
+        )
+        .map(city => ({
+          name: `${city.city} (${city.id.toUpperCase()})`,
+          value: city.id
+        }))
+        .slice(0, 25); // Discord limits to 25 choices
+
+      await interaction.respond(cities);
+    } catch (error) {
+      console.error('Error handling autocomplete:', error);
+      await interaction.respond([]);
+    }
+  }
+});
+
+// Create the /destroy command
+const destroyCommand = {
+  data: new SlashCommandBuilder()
+    .setName('destroy')
+    .setDescription('Destroy a server and see its total cost'),
+  
+  async execute(interaction) {
+    await interaction.deferReply();
+    
+    try {
+      // Get all instances
+      const vultrInstances = await listInstances();
+      const activeInstances = vultrInstances.filter(instance => 
+        instance.status !== 'destroyed' && instance.power_status !== 'destroyed'
+      );
+      
+      if (!activeInstances || activeInstances.length === 0) {
+        return interaction.editReply('No active servers found to destroy.');
+      }
+
+      // Create select menu options from instances
+      const options = activeInstances.map(instance => ({
+        label: instance.label || 'Unnamed Server',
+        description: `Status: ${instance.power_status} | IP: ${instance.main_ip} | Region: ${instance.region}`,
+        value: instance.id
+      }));
+
+      const row = new ActionRowBuilder()
+        .addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId('destroy_server')
+            .setPlaceholder('Select a server to destroy')
+            .addOptions(options)
+        );
+
+      return interaction.editReply({
+        content: '⚠️ **WARNING**: This will permanently destroy the server and all its data!\nSelect a server to destroy:',
+        components: [row]
+      });
+    } catch (error) {
+      console.error('Error executing destroy command:', error);
+      return interaction.editReply('❌ There was an error listing servers.');
+    }
+  }
+};
+
+// Add all commands to the collection
+client.commands.set(listCommand.data.name, listCommand);
+client.commands.set(statusCommand.data.name, statusCommand);
+client.commands.set(startCommand.data.name, startCommand);
+client.commands.set(stopCommand.data.name, stopCommand);
+client.commands.set(createCommand.data.name, createCommand);
+client.commands.set(destroyCommand.data.name, destroyCommand);
+
+// ================ EVENT HANDLERS ================
+
+// When the client is ready, register all slash commands
+client.once('ready', async () => {
+  console.log(`Bot is ready! Logged in as ${client.user.tag}`);
+  
+  try {
+    // Get all commands for registration
+    const commands = [...client.commands.values()].map(command => command.data.toJSON());
+    
+    // Create REST API client
+    const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+    
+    console.log(`Registering ${commands.length} application commands...`);
+    
+    // Register globally
+    await rest.put(
+      Routes.applicationCommands(client.user.id),
+      { body: commands }
+    );
+    
+    console.log(`Successfully registered ${commands.length} application commands!`);
+  } catch (error) {
+    console.error('Error registering commands:', error);
+  }
+});
+
+// Handle slash command interactions
+client.on('interactionCreate', async interaction => {
+  // Ignore non-command interactions
+  if (!interaction.isCommand()) return;
+  
+  const command = client.commands.get(interaction.commandName);
+  
+  if (!command) {
+    console.error(`Command ${interaction.commandName} not found`);
+    return interaction.reply({
+      content: 'Sorry, this command is not available.',
+      ephemeral: true
+    });
+  }
+  
+  try {
+    // Execute the command
+    await command.execute(interaction);
+  } catch (error) {
+    console.error(`Error executing command ${interaction.commandName}:`, error);
+    
+    // Reply with error if the interaction hasn't been replied to yet
+    const replyMethod = interaction.replied || interaction.deferred
+      ? interaction.followUp
+      : interaction.reply;
+    
+    replyMethod.call(interaction, {
+      content: 'There was an error while executing this command.',
+      ephemeral: true
+    }).catch(console.error);
+  }
+});
+
+// Add this to your event handlers section
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isStringSelectMenu()) return;
+
+  if (interaction.customId === 'select_server') {
+    await interaction.deferUpdate();
+    const selectedId = interaction.values[0];
+
+    try {
+      const instance = await getInstance(selectedId);
+      if (!instance) {
+        return interaction.editReply({
+          content: '❌ This server is not available for management.',
+          components: [] // Remove the select menu
+        });
+      }
+      const trackedInstance = instanceState.getInstance(selectedId);
+      
+      // Format and send the response
+      const formattedStatus = formatInstanceDetails(trackedInstance, instance);
+      return interaction.editReply({
+        content: formattedStatus,
+        components: [] // Remove the select menu after selection
+      });
+    } catch (error) {
+      console.error('Error handling server selection:', error);
+      return interaction.editReply({
+        content: '❌ There was an error getting the server status.',
+        components: [] // Remove the select menu
+      });
+    }
+  }
+});
+
+// Add these handlers to your interactionCreate event
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isStringSelectMenu()) return;
+
+  if (interaction.customId === 'start_server') {
+    await interaction.deferUpdate();
+    const selectedId = interaction.values[0];
+    await startInstance(interaction, selectedId);
+  }
+
+  if (interaction.customId === 'stop_server') {
+    await interaction.deferUpdate();
+    const selectedId = interaction.values[0];
+    await stopInstance(interaction, selectedId);
+  }
+});
+
+// Add this to your interaction handlers
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isStringSelectMenu()) return;
+
+  if (interaction.customId === 'destroy_server') {
+    await interaction.deferUpdate();
+    const selectedId = interaction.values[0];
+
+    try {
+      // Get instance details before destroying
+      const instance = await getInstance(selectedId);
+      if (!instance) {
+        return interaction.editReply({
+          content: '❌ This server is not available for management.',
+          components: [] // Remove the select menu
+        });
+      }
+      const serverName = instance.label || 'Unnamed Server';
+      const planId = instance.plan;
+      const createdAt = new Date(instance.date_created);
+      const destroyedAt = new Date();
+
+      // Get plan pricing information following OpenAPI spec exactly
+      let cost = 0;
+      let formattedCost = 'unavailable';
+      
+      try {
+        // Call the plans endpoint as per OpenAPI spec
+        const plansResponse = await vultr.plans.listPlans();
+        
+        // Response structure per OpenAPI: { plans: [...], meta: {...} }
+        if (plansResponse && plansResponse.plans) {
+          const plan = plansResponse.plans.find(p => p.id === planId);
+          
+          // Per OpenAPI spec, monthly_cost is an integer (US Dollars)
+          if (plan && typeof plan.monthly_cost === 'number') {
+            // Calculate uptime in hours (round up to next hour for billing)
+            const uptimeMs = destroyedAt - createdAt;
+            const uptimeHours = Math.ceil(uptimeMs / (1000 * 60 * 60));
+            
+            // Convert monthly cost to hourly rate
+            // Using 730 hours per month (365 days * 24 hours / 12 months)
+            const hourlyRate = plan.monthly_cost / 730;
+            cost = uptimeHours * hourlyRate;
+            
+            formattedCost = `$${cost.toFixed(2)}`;
+            
+            console.log(`Cost calculation: Plan ${planId}, monthly_cost=$${plan.monthly_cost}, ${uptimeHours} hours, $${hourlyRate.toFixed(4)}/hr = ${formattedCost}`);
+          } else {
+            console.log(`Plan ${planId} not found or missing monthly_cost field`);
+          }
+        } else {
+          console.log('Invalid response structure from plans API');
+        }
+      } catch (planError) {
+        console.error('Error fetching plan pricing:', planError);
+        // Log the full error for debugging
+        if (planError.response) {
+          console.error('API Response:', planError.response.status, planError.response.data);
+        }
+      }
+      
+      // Confirm destruction
+      await interaction.editReply({
+        content: `🔄 Destroying server "${serverName}"...`,
+        components: [] // Remove the select menu
+      });
+
+      // Destroy the instance using exact OpenAPI spec method
+      await vultr.instances.deleteInstance({
+        "instance-id": selectedId
+      });
+
+      // Update our state
+      instanceState.updateInstance(selectedId, 'destroyed');
+
+      return interaction.editReply(
+        `✅ Server "${serverName}" has been destroyed.\n` +
+        `Thanks for being a Real One! 🙏\n` +
+        `This session total cost was approximately ${formattedCost}.`
+      );
+    } catch (error) {
+      console.error('Error destroying server:', error);
+      return interaction.editReply({
+        content: '❌ There was an error destroying the server.',
+        components: [] // Remove the select menu
+      });
+    }
+  }
+});
+
+// Add the select_continent handler
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isStringSelectMenu()) return;
+
+  if (interaction.customId === 'select_continent') {
+    await interaction.deferUpdate();
+    const selectedContinent = interaction.values[0];
+    
+    try {
+      const groupedRegions = await getGroupedRegions(vultr);
+      // Flatten all cities in the selected continent
+      const cities = Object.values(groupedRegions[selectedContinent])
+        .flat()
+        .map(city => ({
+          label: `${city.city} (${city.id.toUpperCase()})`,
+          value: city.id,
+          description: `${city.country}`
+        }));
+
+      // Create the city selection menu
+      const cityRow = new ActionRowBuilder()
+        .addComponents(
+          new StringSelectMenuBuilder()
+            .setCustomId('select_city')
+            .setPlaceholder('Select a city (optional - defaults to Dallas)')
+            .addOptions(cities)
+        );
+
+      return interaction.editReply({
+        content: `🌍 Selected continent: ${selectedContinent}\nSelect a city (or press enter to use Dallas):`,
+        components: [cityRow]
+      });
+    } catch (error) {
+      console.error('Error handling continent selection:', error);
+      return interaction.editReply('❌ There was an error selecting the continent.');
+    }
+  }
+});
+
+// Log in to Discord with bot token
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => console.log('Bot is connecting to Discord...'))
+  .catch(error => console.error('Failed to login:', error));
